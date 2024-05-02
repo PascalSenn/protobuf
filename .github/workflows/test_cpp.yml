@@ -7,6 +7,10 @@ on:
         required: true
         description: "The SHA key for the commit we want to run over"
         type: string
+      is_presubmit:
+        required: true
+        description: "When enabled, only run presubmit tests"
+        type: boolean
 
 permissions:
   contents: read
@@ -365,10 +369,11 @@ jobs:
       matrix:
         include:
           # TODO: investigate and fix
-          # - name: MacOS CMake
-          #   os: macos-12
-          #   flags: -DCMAKE_CXX_STANDARD=14
-          #   cache-prefix: macos-cmake
+          - name: MacOS CMake
+            os: macos-12
+            flags: -DCMAKE_CXX_STANDARD=14
+            cache-prefix: macos-cmake
+            ignore_presubmit: true
           - name: Windows CMake
             os: windows-2022
             flags: >-
@@ -412,6 +417,7 @@ jobs:
             cache-prefix: windows-2022-cmake
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    if: ${{ !( inputs.is_presubmit && matrix.ignore_presubmit ) }}
     steps:
       - name: Checkout pending changes
         uses: protocolbuffers/protobuf-ci/checkout@v3
