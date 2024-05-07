@@ -14,6 +14,9 @@
 #include "repeated_field.h"
 #include "shared_message.h"
 
+#define PBRUBY_CHECK_FROZEN_MESSAGE(msg_rb) \
+  PBRUBY_CHECK_FROZEN(upb_Message_IsFrozen(ruby_to_Message(msg_rb)->msg), msg_rb)
+
 static VALUE cParseError = Qnil;
 static VALUE cAbstractMessage = Qnil;
 static ID descriptor_instancevar_interned;
@@ -80,7 +83,7 @@ const upb_Message* Message_Get(VALUE msg_rb, const upb_MessageDef** m) {
 }
 
 upb_Message* Message_GetMutable(VALUE msg_rb, const upb_MessageDef** m) {
-  rb_check_frozen(msg_rb);
+  PBRUBY_CHECK_FROZEN_MESSAGE(msg_rb);
   return (upb_Message*)Message_Get(msg_rb, m);
 }
 
@@ -116,7 +119,9 @@ VALUE Message_GetRubyWrapper(upb_Message* msg, const upb_MessageDef* m,
     val = Message_alloc(klass);
     Message_InitPtr(val, msg, arena);
   }
-
+  if (upb_Message_IsFrozen(msg) && !RB_OBJ_FROZEN(val)) {
+    RB_OBJ_FREEZE(val);
+  }
   return val;
 }
 
@@ -436,7 +441,7 @@ static VALUE Message_method_missing(int argc, VALUE* argv, VALUE _self) {
       if (argc != 2) {
         rb_raise(rb_eArgError, "Expected 2 arguments, received %d", argc);
       }
-      rb_check_frozen(_self);
+      PBRUBY_CHECK_FROZEN_MESSAGE(_self);
       break;
     default:
       if (argc != 1) {
@@ -812,33 +817,37 @@ static VALUE Message_to_h(VALUE _self) {
 
 /*
  * call-seq:
+ *     Message.frozen? => bool
+ *
+ * Returns true if the message is frozen in either Ruby or the underlying
+ * representation. Freezes the Ruby message object if it is not already frozen
+ * in Ruby but it is frozen in the underlying representation.
+ */
+bool Message_frozen(VALUE _self) {
+  if (RB_OBJ_FROZEN(_self)) {
+    return true;
+  }
+  // Underlying representation is frozen but _self is not.
+  if (upb_Message_IsFrozen(ruby_to_Message(_self)->msg)) {
+    RB_OBJ_FREEZE(_self);
+    return true;
+  }
+  return false;
+}
+
+/*
+ * call-seq:
  *     Message.freeze => self
  *
- * Freezes the message object. We have to intercept this so we can pin the
- * Ruby object into memory so we don't forget it's frozen.
+ * Freezes the message object. We have to intercept this so we can freeze the
+ * underlying representation, not just the Ruby wrapper.
  */
 VALUE Message_freeze(VALUE _self) {
   Message* self = ruby_to_Message(_self);
 
   if (RB_OBJ_FROZEN(_self)) return _self;
-  Arena_Pin(self->arena, _self);
+  upb_Message_Freeze(self->msg, upb_MessageDef_MiniTable(self->msgdef));
   RB_OBJ_FREEZE(_self);
-
-  int n = upb_MessageDef_FieldCount(self->msgdef);
-  for (int i = 0; i < n; i++) {
-    const upb_FieldDef* f = upb_MessageDef_Field(self->msgdef, i);
-    VALUE field = Message_getfield(_self, f);
-
-    if (field != Qnil) {
-      if (upb_FieldDef_IsMap(f)) {
-        Map_freeze(field);
-      } else if (upb_FieldDef_IsRepeated(f)) {
-        RepeatedField_freeze(field);
-      } else if (upb_FieldDef_IsSubMessage(f)) {
-        Message_freeze(field);
-      }
-    }
-  }
   return _self;
 }
 
@@ -1352,6 +1361,7 @@ static void Message_define_class(VALUE klass) {
   rb_define_method(klass, "==", Message_eq, 1);
   rb_define_method(klass, "eql?", Message_eq, 1);
   rb_define_method(klass, "freeze", Message_freeze, 0);
+  rb_define_method(klass, "frozen?", Message_frozen, 0);
   rb_define_method(klass, "hash", Message_hash, 0);
   rb_define_method(klass, "to_h", Message_to_h, 0);
   rb_define_method(klass, "inspect", Message_inspect, 0);

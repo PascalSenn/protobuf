@@ -9,18 +9,20 @@ module Google
   module Protobuf
     class FFI
       # Map
-      attach_function :map_clear,  :upb_Map_Clear,                    [:Map], :void
-      attach_function :map_delete, :upb_Map_Delete,                   [:Map, MessageValue.by_value, MessageValue.by_ref], :bool
-      attach_function :map_get,    :upb_Map_Get,                      [:Map, MessageValue.by_value, MessageValue.by_ref], :bool
-      attach_function :create_map, :upb_Map_New,                      [Internal::Arena, CType, CType], :Map
-      attach_function :map_size,   :upb_Map_Size,                     [:Map], :size_t
-      attach_function :map_set,    :upb_Map_Set,                      [:Map, MessageValue.by_value, MessageValue.by_value, Internal::Arena], :bool
+      attach_function :map_clear,   :upb_Map_Clear,                  [:Map], :void
+      attach_function :map_delete,  :upb_Map_Delete,                 [:Map, MessageValue.by_value, MessageValue.by_ref], :bool
+      attach_function :map_get,     :upb_Map_Get,                    [:Map, MessageValue.by_value, MessageValue.by_ref], :bool
+      attach_function :create_map,  :upb_Map_New,                    [Internal::Arena, CType, CType], :Map
+      attach_function :map_size,    :upb_Map_Size,                   [:Map], :size_t
+      attach_function :map_set,     :upb_Map_Set,                    [:Map, MessageValue.by_value, MessageValue.by_value, Internal::Arena], :bool
+      attach_function :map_freeze,  :upb_Map_Freeze,                 [:Map, MiniTable.by_ref], :void
+      attach_function :map_frozen?, :upb_Map_IsFrozen,               [:Map], :bool
 
       # MapIterator
-      attach_function :map_next,   :upb_MapIterator_Next,             [:Map, :pointer], :bool
-      attach_function :map_done,   :upb_MapIterator_Done,             [:Map, :size_t], :bool
-      attach_function :map_key,    :upb_MapIterator_Key,              [:Map, :size_t], MessageValue.by_value
-      attach_function :map_value,  :upb_MapIterator_Value,            [:Map, :size_t], MessageValue.by_value
+      attach_function :map_next,    :upb_MapIterator_Next,           [:Map, :pointer], :bool
+      attach_function :map_done,    :upb_MapIterator_Done,           [:Map, :size_t], :bool
+      attach_function :map_key,     :upb_MapIterator_Key,            [:Map, :size_t], MessageValue.by_value
+      attach_function :map_value,   :upb_MapIterator_Value,          [:Map, :size_t], MessageValue.by_value
     end
     class Map
       include Enumerable
@@ -155,16 +157,27 @@ module Google
       end
       alias size length
 
-      def freeze
-        return self if frozen?
-        super
-        @arena.pin self
-        if value_type == :message
-          internal_iterator do |iterator|
-            value_message_value = Google::Protobuf::FFI.map_value(@map_ptr, iterator)
-            convert_upb_to_ruby(value_message_value, value_type, descriptor, arena).freeze
-          end
+      ##
+      # Is this object frozen?
+      # Returns true if either this Ruby wrapper or the underlying
+      # representation are frozen. Freezes the wrapper if the underlying
+      # representation is already frozen but this wrapper isn't.
+      def frozen?
+        return true if super
+        if Google::Protobuf::FFI.map_frozen?(@map_ptr)
+          freeze
+          return true
         end
+        false
+      end
+        
+      ##
+      # Freezes this object and its underlying representation. Returns self.
+      def freeze
+        return self if method(:frozen?).super_method.call
+        super
+        mini_table = (value_type == :message) ? Google::Protobuf::FFI.get_mini_table(@descriptor) : nil
+        Google::Protobuf::FFI.map_freeze(@map_ptr, mini_table)
         self
       end
 

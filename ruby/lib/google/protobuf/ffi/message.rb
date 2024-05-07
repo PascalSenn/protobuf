@@ -24,6 +24,9 @@ module Google
       attach_function :get_message_which_oneof, :upb_Message_WhichOneof,      [:Message, OneofDescriptor], FieldDescriptor
       attach_function :message_discard_unknown, :upb_Message_DiscardUnknown,  [:Message, Descriptor, :int], :bool
       attach_function :message_next,            :upb_Message_Next,            [:Message, Descriptor, :DefPool, :FieldDefPointer, MessageValue.by_ref, :pointer], :bool
+      attach_function :message_freeze,          :upb_Message_Freeze,          [:Message, MiniTable.by_ref], :void
+      attach_function :message_frozen?,         :upb_Message_IsFrozen,        [:Message], :bool
+
       # MessageValue
       attach_function :message_value_equal,     :shared_Msgval_IsEqual,       [MessageValue.by_value, MessageValue.by_value, CType, Descriptor], :bool
       attach_function :message_value_hash,      :shared_Msgval_GetHash,       [MessageValue.by_value, CType, Descriptor, :uint64_t], :uint64_t
@@ -58,16 +61,26 @@ module Google
             instance
           end
 
-          def freeze
-            return self if frozen?
-            super
-            @arena.pin self
-            self.class.descriptor.each do |field_descriptor|
-              next if field_descriptor.has_presence? && !Google::Protobuf::FFI.get_message_has(@msg, field_descriptor)
-              if field_descriptor.map? or field_descriptor.repeated? or field_descriptor.sub_message?
-                get_field(field_descriptor).freeze
-              end
+          ##
+          # Is this object frozen?
+          # Returns true if either this Ruby wrapper or the underlying
+          # representation are frozen. Freezes the wrapper if the underlying
+          # representation is already frozen but this wrapper isn't.
+          def frozen?
+            return true if super
+            if Google::Protobuf::FFI.message_frozen?(@msg)
+              freeze
+              return true
             end
+            false
+          end
+
+          ##
+          # Freezes this object and its underlying representation. Returns self.
+          def freeze
+            return self if method(:frozen?).super_method.call
+            super
+            Google::Protobuf::FFI.message_freeze(@msg, Google::Protobuf::FFI.get_mini_table(self.class.descriptor))
             self
           end
 
@@ -635,7 +648,6 @@ module Google
             repeated_field = OBJECT_CACHE.get(array.address)
             if repeated_field.nil?
               repeated_field = RepeatedField.send(:construct_for_field, field, @arena, array: array)
-              repeated_field.freeze if frozen?
             end
             repeated_field
           end
@@ -648,7 +660,6 @@ module Google
             map_field = OBJECT_CACHE.get(map.address)
             if map_field.nil?
               map_field = Google::Protobuf::Map.send(:construct_for_field, field, @arena, map: map)
-              map_field.freeze if frozen?
             end
             map_field
           end

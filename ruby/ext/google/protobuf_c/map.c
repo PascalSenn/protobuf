@@ -20,6 +20,9 @@
 // serialization).
 // -----------------------------------------------------------------------------
 
+#define PBRUBY_CHECK_FROZEN_MAP(map_rb) \
+  PBRUBY_CHECK_FROZEN(upb_Map_IsFrozen(ruby_to_Map(map_rb)->map), map_rb)
+
 // -----------------------------------------------------------------------------
 // Map container type.
 // -----------------------------------------------------------------------------
@@ -83,7 +86,9 @@ VALUE Map_GetRubyWrapper(upb_Map* map, upb_CType key_type, TypeInfo value_type,
     }
     return ObjectCache_TryAdd(map, val);
   }
-
+  if (upb_Map_IsFrozen(map) && !RB_OBJ_FROZEN(val)) {
+    RB_OBJ_FREEZE(val);
+  }
   return val;
 }
 
@@ -105,7 +110,7 @@ static TypeInfo Map_keyinfo(Map* self) {
 }
 
 static upb_Map* Map_GetMutable(VALUE _self) {
-  rb_check_frozen(_self);
+  PBRUBY_CHECK_FROZEN_MAP(_self);
   return (upb_Map*)ruby_to_Map(_self)->map;
 }
 
@@ -440,7 +445,7 @@ static VALUE Map_has_key(VALUE _self, VALUE key) {
  */
 static VALUE Map_delete(VALUE _self, VALUE key) {
   Map* self = ruby_to_Map(_self);
-  rb_check_frozen(_self);
+  PBRUBY_CHECK_FROZEN_MAP(_self);
 
   upb_MessageValue key_upb =
       Convert_RubyToUpb(key, "", Map_keyinfo(self), NULL);
@@ -560,28 +565,41 @@ VALUE Map_eq(VALUE _self, VALUE _other) {
 
 /*
  * call-seq:
- *     Message.freeze => self
+ *     Map.frozen? => bool
  *
- * Freezes the message object. We have to intercept this so we can pin the
- * Ruby object into memory so we don't forget it's frozen.
+ * Returns true if the map is frozen in either Ruby or the underlying
+ * representation. Freezes the Ruby map object if it is not already frozen in
+ * Ruby but it is frozen in the underlying representation.
+ */
+bool Map_frozen(VALUE _self) {
+  if (RB_OBJ_FROZEN(_self)) {
+    return true;
+  }
+  // Underlying representation is frozen but _self is not.
+  if (upb_Map_IsFrozen(ruby_to_Map(_self)->map)) {
+    RB_OBJ_FREEZE(_self);
+    return true;
+  }
+  return false;
+}
+
+/*
+ * call-seq:
+ *     Map.freeze => self
+ *
+ * Freezes the map object. We have to intercept this so we can freeze the
+ * underlying representation, not just the Ruby wrapper.
  */
 VALUE Map_freeze(VALUE _self) {
   Map* self = ruby_to_Map(_self);
 
   if (RB_OBJ_FROZEN(_self)) return _self;
-  Arena_Pin(self->arena, _self);
-  RB_OBJ_FREEZE(_self);
-
   if (self->value_type_info.type == kUpb_CType_Message) {
-    size_t iter = kUpb_Map_Begin;
-    upb_MessageValue key, val;
-
-    while (upb_Map_Next(self->map, &key, &val, &iter)) {
-      VALUE val_val =
-          Convert_UpbToRuby(val, self->value_type_info, self->arena);
-      Message_freeze(val_val);
-    }
+    upb_Message_Freeze(self->map, upb_MessageDef_MiniTable(self->value_type_info.def.msgdef));
+  } else {
+    upb_Message_Freeze(self->map, NULL);
   }
+  RB_OBJ_FREEZE(_self);
   return _self;
 }
 
@@ -671,6 +689,7 @@ void Map_register(VALUE module) {
   rb_define_method(klass, "clone", Map_dup, 0);
   rb_define_method(klass, "==", Map_eq, 1);
   rb_define_method(klass, "freeze", Map_freeze, 0);
+  rb_define_method(klass, "frozen?", Map_frozen, 0);
   rb_define_method(klass, "hash", Map_hash, 0);
   rb_define_method(klass, "to_h", Map_to_h, 0);
   rb_define_method(klass, "inspect", Map_inspect, 0);

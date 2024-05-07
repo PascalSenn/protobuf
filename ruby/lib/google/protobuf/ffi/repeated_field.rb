@@ -24,12 +24,14 @@ module Google
   module Protobuf
     class FFI
       # Array
-      attach_function :append_array, :upb_Array_Append,        [:Array, MessageValue.by_value, Internal::Arena], :bool
-      attach_function :get_msgval_at,:upb_Array_Get,           [:Array, :size_t], MessageValue.by_value
-      attach_function :create_array, :upb_Array_New,           [Internal::Arena, CType], :Array
-      attach_function :array_resize, :upb_Array_Resize,        [:Array, :size_t, Internal::Arena], :bool
-      attach_function :array_set,    :upb_Array_Set,           [:Array, :size_t, MessageValue.by_value], :void
-      attach_function :array_size,   :upb_Array_Size,          [:Array], :size_t
+      attach_function :append_array,  :upb_Array_Append,     [:Array, MessageValue.by_value, Internal::Arena], :bool
+      attach_function :get_msgval_at, :upb_Array_Get,        [:Array, :size_t], MessageValue.by_value
+      attach_function :create_array,  :upb_Array_New,        [Internal::Arena, CType], :Array
+      attach_function :array_resize,  :upb_Array_Resize,     [:Array, :size_t, Internal::Arena], :bool
+      attach_function :array_set,     :upb_Array_Set,        [:Array, :size_t, MessageValue.by_value], :void
+      attach_function :array_size,    :upb_Array_Size,       [:Array], :size_t
+      attach_function :array_freeze,  :upb_Array_Freeze,     [:Array, MiniTable.by_ref], :void
+      attach_function :array_frozen?, :upb_Array_IsFrozen,   [:Array], :bool
     end
 
     class RepeatedField
@@ -174,15 +176,27 @@ module Google
       end
       alias size :length
 
-      def freeze
-        return self if frozen?
-        super
-        @arena.pin self
-        if type == :message
-          each do |element|
-            element.freeze
-          end
+      ##
+      # Is this object frozen?
+      # Returns true if either this Ruby wrapper or the underlying
+      # representation are frozen. Freezes the wrapper if the underlying
+      # representation is already frozen but this wrapper isn't.
+      def frozen?
+        return true if super
+        if Google::Protobuf::FFI.array_frozen?(array)
+          freeze
+          return true
         end
+        false
+      end
+        
+      ##
+      # Freezes this object and its underlying representation. Returns self.
+      def freeze
+        return self if method(:frozen?).super_method.call
+        super
+        mini_table = (type == :message) ? Google::Protobuf::FFI.get_mini_table(@descriptor) : nil
+        Google::Protobuf::FFI.array_freeze(array, mini_table)
         self
       end
 
