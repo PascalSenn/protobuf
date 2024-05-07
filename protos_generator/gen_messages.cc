@@ -12,6 +12,7 @@
 
 #include "google/protobuf/descriptor.pb.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "google/protobuf/descriptor.h"
 #include "protos_generator/gen_accessors.h"
 #include "protos_generator/gen_enums.h"
@@ -120,6 +121,81 @@ void WriteModelAccessDeclaration(const protobuf::Descriptor* descriptor,
   output("};\n");
 }
 
+std::string UnderscoresToCamelCase(absl::string_view input,
+                                   bool cap_next_letter) {
+  std::string result;
+  // Note:  I distrust ctype.h due to locales.
+  for (int i = 0; i < input.size(); i++) {
+    if ('a' <= input[i] && input[i] <= 'z') {
+      if (cap_next_letter) {
+        result += input[i] + ('A' - 'a');
+      } else {
+        result += input[i];
+      }
+      cap_next_letter = false;
+    } else if ('A' <= input[i] && input[i] <= 'Z') {
+      // Capital letters are left as-is.
+      result += input[i];
+      cap_next_letter = false;
+    } else if ('0' <= input[i] && input[i] <= '9') {
+      result += input[i];
+      cap_next_letter = true;
+    } else {
+      cap_next_letter = true;
+    }
+  }
+  return result;
+}
+
+std::string FieldConstantName(const protobuf::FieldDescriptor* field) {
+  std::string field_name = UnderscoresToCamelCase(field->name(), true);
+  std::string result = absl::StrCat("k", field_name, "FieldNumber");
+
+  if (!field->is_extension() &&
+      field->containing_type()->FindFieldByCamelcaseName(
+          field->camelcase_name()) != field) {
+    // This field's camelcase name is not unique, add field number to make it
+    // unique.
+    absl::StrAppend(&result, "_", field->number());
+  }
+  return result;
+}
+
+void WriteConstFieldNumbers(Output& output,
+                            const protobuf::Descriptor* descriptor) {
+  // Create field list ordered by non oneof and non weak fields first.
+  std::vector<const protobuf::FieldDescriptor*> optimized_order;
+  optimized_order.reserve(descriptor->field_count());
+  for (auto field : FieldRange(descriptor)) {
+    if (field->options().weak()) {
+      continue;
+    }
+    if (!field->real_containing_oneof()) {
+      optimized_order.push_back(field);
+    }
+  }
+  std::vector<const protobuf::FieldDescriptor*> ordered_fields;
+  ordered_fields.reserve(descriptor->field_count());
+  ordered_fields.insert(ordered_fields.begin(), optimized_order.begin(),
+                        optimized_order.end());
+  for (auto field : FieldRange(descriptor)) {
+    if (!field->real_containing_oneof() && !field->options().weak()) {
+      continue;
+    }
+    ordered_fields.push_back(field);
+  }
+  if (ordered_fields.empty()) {
+    return;
+  }
+  output("enum : int {\n");
+  output.Indent();
+  for (auto field : ordered_fields) {
+    output("$0 = $1,\n", FieldConstantName(field), field->number());
+  }
+  output.Outdent();
+  output("};\n\n");
+}
+
 void WriteModelPublicDeclaration(
     const protobuf::Descriptor* descriptor,
     const std::vector<const protobuf::FieldDescriptor*>& file_exts,
@@ -178,6 +254,7 @@ void WriteModelPublicDeclaration(
       )cc",
       ClassName(descriptor));
   output("\n");
+  WriteConstFieldNumbers(output, descriptor);
   output(
       R"cc(
         private:

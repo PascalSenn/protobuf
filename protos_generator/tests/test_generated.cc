@@ -1134,6 +1134,10 @@ TEST(CppGeneratedCode, HasExtensionAndRegistry) {
   EXPECT_TRUE(::protos::HasExtension(&parsed_model, theme));
 }
 
+TEST(CppGeneratedCode, FieldNumberConstants) {
+  EXPECT_EQ(225, TestModel::kChildMapFieldNumber);
+}
+
 // TODO : Add BUILD rule to test failures below.
 #ifdef TEST_CLEAR_MESSAGE_FAILURE
 TEST(CppGeneratedCode, ClearConstMessageShouldFail) {
