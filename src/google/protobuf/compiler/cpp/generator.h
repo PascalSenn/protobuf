@@ -85,7 +85,7 @@ class PROTOC_EXPORT CppGenerator : public CodeGenerator {
   using CodeGenerator::GetResolvedSourceFeatures;
 
  private:
-  bool opensource_runtime_ = PROTO2_IS_OSS;
+  bool opensource_runtime_ = google::protobuf::internal::IsOss();
   std::string runtime_include_base_;
 
   absl::Status ValidateFeatures(const FileDescriptor* file) const;
